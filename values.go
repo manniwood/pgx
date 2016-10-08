@@ -311,7 +311,7 @@ func (n NullName) Encode(w *WriteBuf, oid Oid) error {
 		return nil
 	}
 
-	return encodeString(w, oid, string(n.Name))
+	return encodeName(w, oid, n.Name)
 }
 
 // The pgx.Char type is for PostgreSQL's special 8-bit-only
@@ -1947,6 +1947,13 @@ func encodeString(w *WriteBuf, oid Oid, value string) error {
 	w.WriteInt32(int32(len(value)))
 	w.WriteBytes([]byte(value))
 	return nil
+}
+
+func encodeName(w *WriteBuf, oid Oid, value Name) error {
+	if len(value) > w.conn.maxIdentifierLength {
+		return fmt.Errorf("Name too long. Input is %v bytes, but max_identifier_length is %v bytes.", len(value), w.conn.maxIdentifierLength)
+	}
+	return encodeString(w, oid, string(value))
 }
 
 func decodeBytea(vr *ValueReader) []byte {

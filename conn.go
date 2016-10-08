@@ -43,31 +43,32 @@ type ConnConfig struct {
 // Use ConnPool to manage access to multiple database connections from multiple
 // goroutines.
 type Conn struct {
-	conn               net.Conn      // the underlying TCP or unix domain socket connection
-	lastActivityTime   time.Time     // the last time the connection was used
-	reader             *bufio.Reader // buffered reader to improve read performance
-	wbuf               [1024]byte
-	writeBuf           WriteBuf
-	Pid                int32             // backend pid
-	SecretKey          int32             // key to use to send a cancel query message to the server
-	RuntimeParams      map[string]string // parameters that have been reported by the server
-	PgTypes            map[Oid]PgType    // oids to PgTypes
-	config             ConnConfig        // config used when establishing this connection
-	TxStatus           byte
-	preparedStatements map[string]*PreparedStatement
-	channels           map[string]struct{}
-	notifications      []*Notification
-	alive              bool
-	causeOfDeath       error
-	logger             Logger
-	logLevel           int
-	mr                 msgReader
-	fp                 *fastpath
-	pgsqlAfInet        *byte
-	pgsqlAfInet6       *byte
-	busy               bool
-	poolResetCount     int
-	preallocatedRows   []Rows
+	conn                net.Conn      // the underlying TCP or unix domain socket connection
+	lastActivityTime    time.Time     // the last time the connection was used
+	reader              *bufio.Reader // buffered reader to improve read performance
+	wbuf                [1024]byte
+	writeBuf            WriteBuf
+	Pid                 int32             // backend pid
+	SecretKey           int32             // key to use to send a cancel query message to the server
+	RuntimeParams       map[string]string // parameters that have been reported by the server
+	PgTypes             map[Oid]PgType    // oids to PgTypes
+	config              ConnConfig        // config used when establishing this connection
+	TxStatus            byte
+	preparedStatements  map[string]*PreparedStatement
+	channels            map[string]struct{}
+	notifications       []*Notification
+	alive               bool
+	causeOfDeath        error
+	logger              Logger
+	logLevel            int
+	mr                  msgReader
+	fp                  *fastpath
+	pgsqlAfInet         *byte
+	pgsqlAfInet6        *byte
+	busy                bool
+	poolResetCount      int
+	preallocatedRows    []Rows
+	maxIdentifierLength int // max_identifier_length. Usually 63 but Pg custom compilers can change it.
 }
 
 // PreparedStatement is a description of a prepared statement
@@ -322,6 +323,13 @@ func (c *Conn) connect(config ConnConfig, network, address string, tlsConfig *tl
 				}
 			}
 
+			if c.maxIdentifierLength == 0 {
+				err = c.loadMaxIdentifierLength()
+				if err != nil {
+					return err
+				}
+			}
+
 			return nil
 		default:
 			if err = c.processContextFreeMsg(t, r); err != nil {
@@ -374,6 +382,25 @@ func (c *Conn) loadInetConstants() error {
 
 	c.pgsqlAfInet = &ipv4[0]
 	c.pgsqlAfInet6 = &ipv6[0]
+
+	return nil
+}
+
+// maxIdentifierLength is the max allowable number of bytes in table names,
+// index names, etc. Generally 63 bytes, but PostgreSQL can be custom-compiled
+// to have a different value.
+func (c *Conn) loadMaxIdentifierLength() error {
+	var maxIdentifierLength int
+
+	err := c.QueryRow(`
+    select setting::int
+      from pg_settings
+     where name = 'max_identifier_length'`).Scan(&maxIdentifierLength)
+	if err != nil {
+		return err
+	}
+
+	c.maxIdentifierLength = maxIdentifierLength
 
 	return nil
 }
